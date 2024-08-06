@@ -60,7 +60,7 @@ pub const NeuralNet = struct {
         _ = try reader.read(std.mem.sliceAsBytes(linkSlice.items(.op)));
     }
     pub fn save(self: *NeuralNet, filename: []const u8) !void {
-        const file = try std.fs.cwd().openFile(filename, .{ .mode = .write_only, .lock = .exclusive });
+        const file = try std.fs.cwd().createFile(filename, .{ .lock = .exclusive });
         defer file.close();
         const writer = file.writer();
 
@@ -162,7 +162,7 @@ pub const NeuralNet = struct {
     }
     pub fn addNodes(self: *NeuralNet, inputNodes: u64, outputNodes: u64, tempNodes: u64, memNodes: u64) !void {
         const totalNodes = inputNodes + outputNodes + tempNodes + memNodes + self.inputNodes + self.outputNodes + self.tempNodes + self.memNodes;
-        try self.nodes.resize(totalNodes);
+        try self.nodes.ensureUnusedCapacity(totalNodes);
 
         var addIndex = self.inputNodes;
         var newSlice = self.nodes.addManyAtAssumeCapacity(addIndex, inputNodes);
@@ -184,10 +184,10 @@ pub const NeuralNet = struct {
         self.adjustLinks(addIndex, memNodes);
         @memset(newSlice, 0);
 
-        self.inputNodes = inputNodes;
-        self.outputNodes = outputNodes;
-        self.tempNodes = tempNodes;
-        self.memNodes = memNodes;
+        self.inputNodes += inputNodes;
+        self.outputNodes += outputNodes;
+        self.tempNodes += tempNodes;
+        self.memNodes += memNodes;
     }
     fn adjustLinks(self: *NeuralNet, index: u64, count: u64) void {
         const linkSlice = self.links.slice();
