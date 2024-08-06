@@ -229,12 +229,14 @@ pub const NeuralNet = struct {
     }
     pub fn addLinks(self: *NeuralNet, links: []Link) !void {
         try self.links.ensureUnusedCapacity(self.allocator, links.len);
+        self.noLinks += links.len;
         for (links) |link| {
             self.links.appendAssumeCapacity(link);
         }
     }
     pub fn deleteLink(self: *NeuralNet, index: u64) void {
         self.links.swapRemove(index);
+        self.noLinks -= 1;
     }
     pub fn setLink(self: *NeuralNet, index: u64, weight: f64, op: Operation) void {
         const slice = self.links.slice();
