@@ -7,7 +7,6 @@ pub const NeuralNet = struct {
     outputNodes: u64,
     tempNodes: u64,
     memNodes: u64,
-    noLinks: u64,
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(f64),
     links: std.MultiArrayList(Link),
@@ -18,7 +17,6 @@ pub const NeuralNet = struct {
             .outputNodes = 0,
             .tempNodes = 0,
             .memNodes = 0,
-            .noLinks = 0,
             .allocator = alloc,
             .nodes = std.ArrayList(f64).init(alloc),
             .links = std.MultiArrayList(Link){},
@@ -39,12 +37,12 @@ pub const NeuralNet = struct {
         self.outputNodes = try reader.readInt(u64, .big);
         self.tempNodes = try reader.readInt(u64, .big);
         self.memNodes = try reader.readInt(u64, .big);
-        self.noLinks = try reader.readInt(u64, .big);
+        const noLinks = try reader.readInt(u64, .big);
 
         // Creating Space for Nodes & Links
         const totalNodes = self.inputNodes + self.outputNodes + self.tempNodes + self.memNodes;
         try self.nodes.resize(totalNodes);
-        try self.links.resize(self.allocator, self.noLinks);
+        try self.links.resize(self.allocator, noLinks);
 
         // Load Memory Nodes
         @memset(self.nodes.items[0 .. totalNodes - self.memNodes], 0);
@@ -69,7 +67,7 @@ pub const NeuralNet = struct {
         try writer.writeInt(u64, self.outputNodes, .big);
         try writer.writeInt(u64, self.tempNodes, .big);
         try writer.writeInt(u64, self.memNodes, .big);
-        try writer.writeInt(u64, self.noLinks, .big);
+        try writer.writeInt(u64, @as(u64, self.links.len), .big);
 
         // Saving Memory Nodes
         const memNodeSlice = self.nodes.items[self.nodes.items.len - self.memNodes ..];
@@ -93,27 +91,7 @@ pub const NeuralNet = struct {
     pub fn getOutputs(self: *NeuralNet) []f64 {
         return self.nodes.items[self.inputNodes .. self.inputNodes + self.outputNodes];
     }
-
     pub fn process(self: *NeuralNet) void {
-        const totalNodes = self.inputNodes + self.outputNodes + self.tempNodes + self.memNodes;
-
-        // Reset Temp Nodes
-        @memset(self.nodes.items[self.inputNodes + self.outputNodes .. totalNodes - self.memNodes], 0);
-
-        // Execute Memory Nodes
-        for (totalNodes - self.memNodes..totalNodes) |i| {
-            try self.execute(i);
-        }
-
-        // Execute Input Nodes
-        for (0..self.inputNodes) |i| {
-            try self.execute(i);
-        }
-    }
-    fn execute(self: *NeuralNet, nodeIndex: u64) !void {
-        const stack = std.ArrayList(usize).init(self.allocator);
-        defer stack.deinit();
-
         const nodes = self.nodes.items;
         const linksSlice = self.links.slice();
         const srcs: []u64 = linksSlice.items(.src);
@@ -121,28 +99,24 @@ pub const NeuralNet = struct {
         const weights: []f64 = linksSlice.items(.weight);
         const ops: []Operation = linksSlice.items(.op);
 
-        try stack.append(nodeIndex);
-        while (stack.len > 0) {
-            const current = stack.pop();
+        // Reset Temp Nodes
+        @memset(self.nodes.items[self.inputNodes + self.outputNodes .. nodes.len - self.memNodes], 0);
 
-            for (srcs, 0..) |src, i| {
-                if (src == current) {
-                    try stack.append(dests[i]);
-                    switch (ops[i]) {
-                        .addition => {
-                            nodes[dests[i]] += src * weights[i];
-                        },
-                        .subtraction => {
-                            nodes[dests[i]] -= src * weights[i];
-                        },
-                        .multiplication => {
-                            nodes[dests[i]] *= src * weights[i];
-                        },
-                        .division => {
-                            nodes[dests[i]] /= src * weights[i];
-                        },
-                    }
-                }
+        // Execute Links
+        for (srcs, dests, weights, ops) |src, dest, weight, op| {
+            switch (op) {
+                .addition => {
+                    nodes[dest] += nodes[src] * weight;
+                },
+                .subtraction => {
+                    nodes[dest] -= nodes[src] * weight;
+                },
+                .multiplication => {
+                    nodes[dest] *= nodes[src] * weight;
+                },
+                .division => {
+                    nodes[dest] /= nodes[src] * weight;
+                },
             }
         }
     }
@@ -156,8 +130,8 @@ pub const NeuralNet = struct {
         try self.nodes.resize(totalNodes);
         try self.links.resize(self.allocator, links.len);
 
-        for (links, 0..) |link, i| {
-            self.links.set(i, link);
+        for (links) |link| {
+            try self.addLink(link);
         }
     }
     pub fn addNodes(self: *NeuralNet, inputNodes: u64, outputNodes: u64, tempNodes: u64, memNodes: u64) !void {
@@ -227,16 +201,26 @@ pub const NeuralNet = struct {
     pub fn setNode(self: *NeuralNet, index: u64, value: f64) void {
         self.nodes.items[index] = value;
     }
-    pub fn addLinks(self: *NeuralNet, links: []Link) !void {
-        try self.links.ensureUnusedCapacity(self.allocator, links.len);
-        self.noLinks += links.len;
-        for (links) |link| {
-            self.links.appendAssumeCapacity(link);
+    pub fn addLink(self: *NeuralNet, link: Link) !void {
+        const linksSlice = self.links.slice();
+        const srcs: []u64 = linksSlice.items(.src);
+
+        if (link.dest > self.inputNodes and link.dest < self.inputNodes + self.outputNodes) {
+            try self.links.insert(self.allocator, 0, link);
+            return;
         }
+
+        var i = srcs.len;
+        while (i >= 0) : (i -= 1) {
+            if (srcs[i] == link.dest) {
+                try self.links.insert(self.allocator, i + 1, link);
+                return;
+            }
+        }
+        return error.CantNotInsert;
     }
     pub fn deleteLink(self: *NeuralNet, index: u64) void {
-        self.links.swapRemove(index);
-        self.noLinks -= 1;
+        self.links.orderedRemove(index);
     }
     pub fn setLink(self: *NeuralNet, index: u64, weight: f64, op: Operation) void {
         const slice = self.links.slice();
