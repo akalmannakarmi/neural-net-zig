@@ -4,9 +4,9 @@ const Operation = @import("structs.zig").Operation;
 
 pub const NeuralNet = struct {
     inputNodes: u64,
-    outputNodes: u64,
     tempNodes: u64,
     memNodes: u64,
+    outputNodes: u64,
     allocator: std.mem.Allocator,
     nodes: std.ArrayList(f64),
     links: std.MultiArrayList(Link),
@@ -14,9 +14,9 @@ pub const NeuralNet = struct {
     pub fn init(alloc: std.mem.Allocator) NeuralNet {
         return .{
             .inputNodes = 0,
-            .outputNodes = 0,
             .tempNodes = 0,
             .memNodes = 0,
+            .outputNodes = 0,
             .allocator = alloc,
             .nodes = std.ArrayList(f64).init(alloc),
             .links = std.MultiArrayList(Link){},
@@ -34,19 +34,19 @@ pub const NeuralNet = struct {
 
         // reading no of Nodes & Links
         self.inputNodes = try reader.readInt(u64, .big);
-        self.outputNodes = try reader.readInt(u64, .big);
         self.tempNodes = try reader.readInt(u64, .big);
         self.memNodes = try reader.readInt(u64, .big);
+        self.outputNodes = try reader.readInt(u64, .big);
         const noLinks = try reader.readInt(u64, .big);
 
         // Creating Space for Nodes & Links
-        const totalNodes = self.inputNodes + self.outputNodes + self.tempNodes + self.memNodes;
+        const totalNodes = self.inputNodes + self.tempNodes + self.memNodes + self.outputNodes;
         try self.nodes.resize(totalNodes);
         try self.links.resize(self.allocator, noLinks);
 
         // Load Memory Nodes
-        @memset(self.nodes.items[0 .. totalNodes - self.memNodes], 0);
-        const memNodeSlice = self.nodes.items[totalNodes - self.memNodes ..];
+        @memset(self.nodes.items, 0);
+        const memNodeSlice = self.nodes.items[self.inputNodes + self.tempNodes .. totalNodes - self.outputNodes];
         _ = try reader.read(std.mem.sliceAsBytes(memNodeSlice));
 
         // Load Links
@@ -64,13 +64,13 @@ pub const NeuralNet = struct {
 
         // Writing No of Nodes and Links
         try writer.writeInt(u64, self.inputNodes, .big);
-        try writer.writeInt(u64, self.outputNodes, .big);
         try writer.writeInt(u64, self.tempNodes, .big);
         try writer.writeInt(u64, self.memNodes, .big);
+        try writer.writeInt(u64, self.outputNodes, .big);
         try writer.writeInt(u64, @as(u64, self.links.len), .big);
 
         // Saving Memory Nodes
-        const memNodeSlice = self.nodes.items[self.nodes.items.len - self.memNodes ..];
+        const memNodeSlice = self.nodes.items[self.inputNodes + self.tempNodes .. self.nodes.items.len - self.outputNodes];
         _ = try writer.write(std.mem.sliceAsBytes(memNodeSlice));
 
         // Saving Links
@@ -89,7 +89,7 @@ pub const NeuralNet = struct {
         }
     }
     pub fn getOutputs(self: *NeuralNet) []f64 {
-        return self.nodes.items[self.inputNodes .. self.inputNodes + self.outputNodes];
+        return self.nodes.items[self.nodes.items.len - self.outputNodes ..];
     }
     pub fn process(self: *NeuralNet) void {
         const nodes = self.nodes.items;
@@ -100,7 +100,7 @@ pub const NeuralNet = struct {
         const ops: []Operation = linksSlice.items(.op);
 
         // Reset Temp Nodes
-        @memset(self.nodes.items[self.inputNodes + self.outputNodes .. nodes.len - self.memNodes], 0);
+        @memset(self.nodes.items[self.inputNodes .. self.inputNodes + self.tempNodes], 0);
 
         // Execute Links
         for (srcs, dests, weights, ops) |src, dest, weight, op| {
@@ -121,18 +121,15 @@ pub const NeuralNet = struct {
         }
     }
 
-    pub fn create(self: *NeuralNet, inputNodes: u64, outputNodes: u64, tempNodes: u64, memNodes: u64, links: []Link) !void {
+    pub fn create(self: *NeuralNet, inputNodes: u64, outputNodes: u64, tempNodes: u64, memNodes: u64, links: []const Link) !void {
         self.inputNodes = inputNodes;
-        self.outputNodes = outputNodes;
         self.tempNodes = tempNodes;
         self.memNodes = memNodes;
-        const totalNodes = inputNodes + outputNodes + tempNodes + memNodes;
+        self.outputNodes = outputNodes;
+        const totalNodes = inputNodes + tempNodes + memNodes + outputNodes;
         try self.nodes.resize(totalNodes);
         try self.links.resize(self.allocator, links.len);
-
-        for (links) |link| {
-            try self.addLink(link);
-        }
+        try self.addLinks(links);
     }
     pub fn addNodes(self: *NeuralNet, inputNodes: u64, outputNodes: u64, tempNodes: u64, memNodes: u64) !void {
         const totalNodes = inputNodes + outputNodes + tempNodes + memNodes + self.inputNodes + self.outputNodes + self.tempNodes + self.memNodes;
@@ -143,12 +140,7 @@ pub const NeuralNet = struct {
         self.adjustLinks(addIndex, inputNodes);
         @memset(newSlice, 0);
 
-        addIndex += inputNodes + self.outputNodes;
-        newSlice = self.nodes.addManyAtAssumeCapacity(addIndex, outputNodes);
-        self.adjustLinks(addIndex, outputNodes);
-        @memset(newSlice, 0);
-
-        addIndex += outputNodes + self.tempNodes;
+        addIndex += inputNodes + self.tempNodes;
         newSlice = self.nodes.addManyAtAssumeCapacity(addIndex, tempNodes);
         self.adjustLinks(addIndex, tempNodes);
         @memset(newSlice, 0);
@@ -158,10 +150,15 @@ pub const NeuralNet = struct {
         self.adjustLinks(addIndex, memNodes);
         @memset(newSlice, 0);
 
+        addIndex += memNodes + self.outputNodes;
+        newSlice = self.nodes.addManyAtAssumeCapacity(addIndex, outputNodes);
+        self.adjustLinks(addIndex, outputNodes);
+        @memset(newSlice, 0);
+
         self.inputNodes += inputNodes;
-        self.outputNodes += outputNodes;
         self.tempNodes += tempNodes;
         self.memNodes += memNodes;
+        self.outputNodes += outputNodes;
     }
     fn adjustLinks(self: *NeuralNet, index: u64, count: u64) void {
         const linkSlice = self.links.slice();
@@ -201,23 +198,27 @@ pub const NeuralNet = struct {
     pub fn setNode(self: *NeuralNet, index: u64, value: f64) void {
         self.nodes.items[index] = value;
     }
-    pub fn addLink(self: *NeuralNet, link: Link) !void {
-        const linksSlice = self.links.slice();
-        const srcs: []u64 = linksSlice.items(.src);
+    pub fn addLinks(self: *NeuralNet, links: []Link) !void {
+        self.links.ensureUnusedCapacity(self.allocator, links.len);
 
-        if (link.dest > self.inputNodes and link.dest < self.inputNodes + self.outputNodes) {
-            try self.links.insert(self.allocator, 0, link);
-            return;
-        }
+        for (links) |link| {
+            const linksSlice = self.links.slice();
+            const srcs: []u64 = linksSlice.items(.src);
 
-        var i = srcs.len;
-        while (i >= 0) : (i -= 1) {
-            if (srcs[i] == link.dest) {
-                try self.links.insert(self.allocator, i + 1, link);
-                return;
+            if (link.dest > self.nodes.items.len - self.outputNodes and link.dest < self.nodes.items.len) {
+                self.links.insertAssumeCapacity(0, link);
+                continue;
             }
+
+            var i = srcs.len;
+            while (i >= 0) : (i -= 1) {
+                if (srcs[i] == link.dest) {
+                    self.links.insertAssumeCapacity(i + 1, link);
+                    continue;
+                }
+            }
+            return error.CantNotInsert;
         }
-        return error.CantNotInsert;
     }
     pub fn deleteLink(self: *NeuralNet, index: u64) void {
         self.links.orderedRemove(index);
@@ -228,5 +229,17 @@ pub const NeuralNet = struct {
         const ops: []Operation = slice.items(.op);
         weights[index] = weight;
         ops[index] = op;
+    }
+
+    pub fn clone(self: *NeuralNet) !NeuralNet {
+        return NeuralNet{
+            .inputNodes = self.inputNodes,
+            .tempNodes = self.tempNodes,
+            .memNodes = self.memNodes,
+            .outputNodes = self.outputNodes,
+            .allocator = self.allocator,
+            .nodes = try self.nodes.clone(),
+            .links = try self.links.clone(self.allocator),
+        };
     }
 };
