@@ -4,29 +4,18 @@ const Operation = @import("structs.zig").Operation;
 const NeuralNet = @import("ai.zig").NeuralNet;
 const Random = std.Random;
 
-var rng = Random.DefaultPrng.init(0).random();
+var defPrng = Random.DefaultPrng.init(0);
+var rng = defPrng.random();
 
-const Self = @This();
-nn: NeuralNet,
-
-pub fn init(alloc: std.mem.Allocator) Self {
-    return Self{
-        .nn = NeuralNet.init(alloc),
-    };
-}
-pub fn deinit(self: *Self) void {
-    self.nn.deinit();
-}
-
-pub fn createRandom(self: *Self, input: u64, output: u64, temp: u64, mem: u64) !void {
+pub fn createRandom(allocator: std.mem.Allocator, input: u64, output: u64, temp: u64, mem: u64) !NeuralNet {
     const totalNodes = input + temp + mem + output;
-    const links = std.ArrayList(Link).init(self.nn.allocator);
-    const nodes = std.ArrayList(u64).init(self.nn.allocator);
-    const bitSet = try std.DynamicBitSet.initEmpty(self.nn.allocator, totalNodes);
-    nodes.ensureTotalCapacity(totalNodes);
+    var links = std.ArrayList(Link).init(allocator);
+    var nodes = std.ArrayList(u64).init(allocator);
+    var bitSet = try std.DynamicBitSet.initEmpty(allocator, totalNodes);
+    try nodes.ensureTotalCapacity(totalNodes);
 
     for (totalNodes..totalNodes + output) |out| {
-        nodes.append(out);
+        try nodes.append(out);
         bitSet.unset(out);
     }
 
@@ -43,71 +32,90 @@ pub fn createRandom(self: *Self, input: u64, output: u64, temp: u64, mem: u64) !
             }
             const src = rng.uintLessThan(u64, totalNodes);
             if (src == dest or bitSet.isSet(src)) continue;
-            links.append(.{
+            try links.append(.{
                 .dest = dest,
                 .src = src,
                 .weight = rng.floatNorm(f64),
                 .op = rng.enumValue(Operation),
             });
             nodes.appendAssumeCapacity(src);
-            const value = rng.weightedIndex(u64, []u64{ 10, i });
+            const value = rng.weightedIndex(u64, &[_]u64{ 10, i });
             if (value == 1) {
-                nodes.orderedRemove(index);
+                _ = nodes.orderedRemove(index);
                 index -= 1;
             }
         }
     }
-    try self.nn.create(input, output, temp, mem, links.items);
+    var nn = NeuralNet.init(allocator);
+    try nn.create(input, output, temp, mem, links.items);
+
+    // Setting random mem nodes
+    for (nn.nodes.items, nn.inputNodes + nn.tempNodes..nn.nodes.items.len - nn.outputNodes) |*value, _| {
+        value.* = rng.floatNorm(f64);
+    }
+    return nn;
 }
 
-pub fn createRnCopy(self: *Self, learnRate: u64) !Self {
-    const copy = Self{
-        .nn = self.nn.clone(),
-    };
+pub fn createRnCopy(self: *const NeuralNet, learnRate: u64) !NeuralNet {
+    var copy = try self.clone();
 
     // Adding Nodes
-    const value = rng.weightedIndex(u64, []u64{ 10, learnRate });
+    var value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate });
     if (value == 1) {
-        self.nn.addNodes(0, 0, rng.uintLessThan(u64, 10), rng.uintLessThan(u64, 10));
+        try copy.addNodes(0, 0, rng.uintLessThan(u64, 10), rng.uintLessThan(u64, 10));
+    }
+
+    // Updating/Removing Nodes
+    value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate / 2, learnRate });
+    var i: u64 = 0;
+    while (value > 0) : (i += 1) {
+        if (value == 1) {
+            _ = copy.nodes.orderedRemove(rng.intRangeLessThan(usize, copy.inputNodes, copy.nodes.items.len - copy.outputNodes));
+        } else {
+            const index = rng.intRangeLessThan(usize, copy.inputNodes + copy.tempNodes, copy.nodes.items.len - copy.outputNodes);
+            copy.nodes.items[index] += rng.floatNorm(f64);
+        }
+        value = rng.weightedIndex(u64, &[_]u64{ 10 + i, learnRate });
     }
 
     // Adding/Updating Links
-    const links = std.ArrayList(Link).init(self.nn.allocator);
-    const bitSet = try std.DynamicBitSet.initEmpty(self.nn.allocator, self.nn.nodes.items.len);
+    var links = std.ArrayList(Link).init(copy.allocator);
+    var bitSet = try std.DynamicBitSet.initEmpty(copy.allocator, copy.nodes.items.len);
 
-    const linksSlice = self.nn.links.slice();
+    const linksSlice = copy.links.slice();
     const dests: []u64 = linksSlice.items(.dest);
-    for (dests, 0..) |dest, i| {
+    for (dests, 0..) |dest, index| {
         bitSet.set(dest);
-        const v = rng.weightedIndex(u64, []u64{ 10 + links.items.len, learnRate / 2, learnRate });
-        if (v == 1) {
-            const src = rng.uintLessThan(u64, self.nn.nodes.items.len);
+        value = rng.weightedIndex(u64, &[_]u64{ 10 + links.items.len, learnRate / 2, learnRate });
+        if (value == 1) {
+            const src = rng.uintLessThan(u64, copy.nodes.items.len);
             if (src == dest or bitSet.isSet(src)) continue;
-            links.append(.{
+            try links.append(.{
                 .dest = dest,
                 .src = src,
                 .weight = rng.floatNorm(f64),
                 .op = rng.enumValue(Operation),
             });
-        } else if (v == 2) {
-            const link = self.nn.links.get(i);
+        } else if (value == 2) {
+            var link = copy.links.get(index);
             link.weight = rng.floatNorm(f64);
+            copy.links.set(index, link);
 
-            if (rng.weightedIndex(u64, []u64{ learnRate, learnRate / 4 }) == 1) {
+            if (rng.weightedIndex(u64, &[_]u64{ learnRate, learnRate / 4 }) == 1) {
                 link.op = rng.enumValue(Operation);
             }
         }
     }
 
     // Removing Links
-    var value_ = rng.weightedIndex(u64, []u64{ 10, learnRate });
-    var i = 0;
-    while (value_ == 1) : (i += 1) {
-        self.nn.links.orderedRemove(rng.uintLessThan(usize, self.nn.links.len));
-        value_ = rng.weightedIndex(u64, []u64{ 10 + i, learnRate });
+    value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate });
+    i = 0;
+    while (value == 1) : (i += 1) {
+        copy.links.orderedRemove(rng.uintLessThan(usize, copy.links.len));
+        value = rng.weightedIndex(u64, &[_]u64{ 10 + i, learnRate });
     }
 
-    try self.nn.addLinks(links.items);
+    try copy.addLinks(links.items);
 
     return copy;
 }

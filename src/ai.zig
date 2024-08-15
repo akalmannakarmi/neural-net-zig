@@ -198,8 +198,8 @@ pub const NeuralNet = struct {
     pub fn setNode(self: *NeuralNet, index: u64, value: f64) void {
         self.nodes.items[index] = value;
     }
-    pub fn addLinks(self: *NeuralNet, links: []Link) !void {
-        self.links.ensureUnusedCapacity(self.allocator, links.len);
+    pub fn addLinks(self: *NeuralNet, links: []const Link) !void {
+        try self.links.ensureUnusedCapacity(self.allocator, links.len);
 
         for (links) |link| {
             const linksSlice = self.links.slice();
@@ -231,7 +231,7 @@ pub const NeuralNet = struct {
         ops[index] = op;
     }
 
-    pub fn clone(self: *NeuralNet) !NeuralNet {
+    pub fn clone(self: *const NeuralNet) !NeuralNet {
         return NeuralNet{
             .inputNodes = self.inputNodes,
             .tempNodes = self.tempNodes,
