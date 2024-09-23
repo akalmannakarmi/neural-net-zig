@@ -12,20 +12,19 @@ pub fn createRandom(allocator: std.mem.Allocator, input: u64, output: u64, temp:
     var links = std.ArrayList(Link).init(allocator);
     var nodes = std.ArrayList(u64).init(allocator);
     var bitSet = try std.DynamicBitSet.initEmpty(allocator, totalNodes);
-    try nodes.ensureTotalCapacity(totalNodes);
 
-    for (totalNodes..totalNodes + output) |out| {
+    for (totalNodes - output..totalNodes) |out| {
         try nodes.append(out);
         bitSet.unset(out);
     }
 
     var bitSetCount = totalNodes;
     var i: u64 = 1;
-    while (nodes.items.len > 0) : (i += 1) {
+    while (bitSetCount > 0) : (i += 1) {
         const oldLen = nodes.items.len;
-        var index: usize = 0;
-        while (index < oldLen) : (index += 1) {
-            const dest = nodes.items[index];
+        var index: usize = 1;
+        while (index <= oldLen) : (index += 1) {
+            const dest = nodes.items[index - 1];
             if (!bitSet.isSet(dest)) {
                 bitSet.set(dest);
                 bitSetCount -= 1;
@@ -38,10 +37,10 @@ pub fn createRandom(allocator: std.mem.Allocator, input: u64, output: u64, temp:
                 .weight = rng.floatNorm(f64),
                 .op = rng.enumValue(Operation),
             });
-            nodes.appendAssumeCapacity(src);
+            try nodes.append(src);
             const value = rng.weightedIndex(u64, &[_]u64{ 10, i });
             if (value == 1) {
-                _ = nodes.orderedRemove(index);
+                _ = nodes.orderedRemove(index - 1);
                 index -= 1;
             }
         }
@@ -50,8 +49,8 @@ pub fn createRandom(allocator: std.mem.Allocator, input: u64, output: u64, temp:
     try nn.create(input, output, temp, mem, links.items);
 
     // Setting random mem nodes
-    for (nn.nodes.items, nn.inputNodes + nn.tempNodes..nn.nodes.items.len - nn.outputNodes) |*value, _| {
-        value.* = rng.floatNorm(f64);
+    for (nn.inputNodes + nn.tempNodes..nn.nodes.items.len - nn.outputNodes) |index| {
+        nn.nodes.items[index] = rng.floatNorm(f64);
     }
     return nn;
 }
@@ -62,19 +61,19 @@ pub fn createRnCopy(self: *const NeuralNet, learnRate: u64) !NeuralNet {
     // Adding Nodes
     var value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate });
     if (value == 1) {
-        try copy.addNodes(0, 0, rng.uintLessThan(u64, 10), rng.uintLessThan(u64, 10));
+        // try copy.addNodes(0, 0, rng.uintLessThan(u64, 10), rng.uintLessThan(u64, 10));
     }
 
     // Updating/Removing Nodes
     value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate / 2, learnRate });
     var i: u64 = 0;
     while (value > 0) : (i += 1) {
-        if (value == 1) {
-            _ = copy.nodes.orderedRemove(rng.intRangeLessThan(usize, copy.inputNodes, copy.nodes.items.len - copy.outputNodes));
-        } else {
-            const index = rng.intRangeLessThan(usize, copy.inputNodes + copy.tempNodes, copy.nodes.items.len - copy.outputNodes);
-            copy.nodes.items[index] += rng.floatNorm(f64);
-        }
+        // if (value == 1) {
+        //     copy.deleteNode(rng.intRangeLessThan(usize, copy.inputNodes, copy.nodes.items.len - copy.outputNodes));
+        // } else {
+        //     const index = rng.intRangeLessThan(usize, copy.inputNodes + copy.tempNodes, copy.nodes.items.len - copy.outputNodes);
+        //     copy.nodes.items[index] += rng.floatNorm(f64);
+        // }
         value = rng.weightedIndex(u64, &[_]u64{ 10 + i, learnRate });
     }
 
@@ -106,16 +105,15 @@ pub fn createRnCopy(self: *const NeuralNet, learnRate: u64) !NeuralNet {
             }
         }
     }
+    try copy.addLinks(links.items);
 
     // Removing Links
     value = rng.weightedIndex(u64, &[_]u64{ 10, learnRate });
     i = 0;
     while (value == 1) : (i += 1) {
-        copy.links.orderedRemove(rng.uintLessThan(usize, copy.links.len));
+        copy.deleteLink(rng.uintLessThan(usize, copy.links.len));
         value = rng.weightedIndex(u64, &[_]u64{ 10 + i, learnRate });
     }
-
-    try copy.addLinks(links.items);
 
     return copy;
 }

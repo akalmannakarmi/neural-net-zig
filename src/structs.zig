@@ -9,5 +9,4 @@ pub const Operation = enum(u8) {
     addition,
     subtraction,
     multiplication,
-    division,
 };
